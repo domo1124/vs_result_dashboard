@@ -6,9 +6,7 @@ import pandas as pd
 # ============================================================
 # 設定：スプレッドシートのURLをここに貼る
 # ============================================================
-
-SPREADSHEET_ID = "1VYm9g4l2X9qF9o5zGvf3xnv_JHVYdh_LVJEZOTBygMI" # URLの /d/〇〇〇/ の部分
-
+SPREADSHEET_ID = st.secrets["spreadsheet"]["id"]
 # シートごとのgid（スプレッドシート下部タブを右クリック→「シートのリンクをコピー」で確認）
 SHEET_GID = {
     "battles": "1903861099", # resultシート
