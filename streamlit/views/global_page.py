@@ -194,7 +194,7 @@ with tab_battle:
     st.header(f"シーズン:{active_season}")
     df_active_season = df[df["season"] == active_season]
     df_master = df[
-        (df["rank"] == "ハイパーボール") & 
+        (df["rank"] == "マスターボール") & 
         (df["season"] == active_season)
     ]
     wr_all    = win_rate(df)

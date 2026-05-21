@@ -11,10 +11,11 @@ SPREADSHEET_ID = "1VYm9g4l2X9qF9o5zGvf3xnv_JHVYdh_LVJEZOTBygMI" # URLの /d/〇�
 
 # シートごとのgid（スプレッドシート下部タブを右クリック→「シートのリンクをコピー」で確認）
 SHEET_GID = {
-    "battles": "737455048", # resultシート
+    "battles": "1903861099", # resultシート
     "myparty_analysis_list": "915221700", 
     "season": "722242110",
-    "vs_party_pokemon": "705459567"
+    "vs_party_pokemon": "705459567",
+    "my_party_pokemon": "1298543501"
 }
 # ============================================================
 # URL生成
@@ -68,7 +69,18 @@ def load_vs_party_pokemon() -> pd.DataFrame:
     """相手パーティ一覧のシートを読み込む"""
     try:
         df = pd.read_csv(_build_url("vs_party_pokemon"))
-        df = _clean_vs_party_pokemon(df)
+        df = _clean_party_pokemon(df)
+        return df
+    except Exception as e:
+        st.error(f"相手パーティ一覧の読み込みに失敗しました: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def load_my_party_pokemon() -> pd.DataFrame:
+    """自分のパーティ一覧のシートを読み込む"""
+    try:
+        df = pd.read_csv(_build_url("my_party_pokemon"))
+        df = _clean_party_pokemon(df)
         return df
     except Exception as e:
         st.error(f"相手パーティ一覧の読み込みに失敗しました: {e}")
@@ -79,30 +91,14 @@ def load_vs_party_pokemon() -> pd.DataFrame:
 
 def _clean_battles(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip() # 列名の空白除去
-    drop_columns = [
-      'timestamp',
-      'video_file_name',
-      'work_mp_1',
-      'work_mp_2',
-      'work_mp_3',
-      'work_mp_4',
-      'work_mp_5',
-      'work_mp_6',
-      'work_vp_1',
-      'work_vp_2',
-      'work_vp_3',
-      'work_vp_4',
-      'work_vp_5',
-      'work_vp_6'
-    ]
-    df = df.drop(columns=drop_columns)
     if "vs_datetime" in df.columns:
         df["vs_datetime"] =  pd.to_datetime(df['vs_datetime'], format='%Y%m%d_%H%M%S', errors="coerce")
     if "result" in df.columns:
         df["result"] = df["result"].str.strip() # 「勝」「負」などの空白除去
+        df["is_win"] = df["result"] == "WIN"
     return df.dropna(how="all") # 完全に空の行を除去
 
-def _clean_vs_party_pokemon(df: pd.DataFrame) -> pd.DataFrame:
+def _clean_party_pokemon(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.str.strip() # 列名の空白除去
     return df.dropna(how="all") # 完全に空の行を除去
 
@@ -138,6 +134,7 @@ if __name__ == "__main__":
     my_party_ids = load_parties()
     season_list,active_season = load_season()
     vs_party_pokemon=load_vs_party_pokemon()
+    my_party_pokemon=load_my_party_pokemon()
     # 3. ナビゲーション（サイドバーメニュー）の定義
     # 「全体ページ」を登録
     pages_dict = {
@@ -147,17 +144,18 @@ if __name__ == "__main__":
             )
         ]
     }
-
-    # 「パーティ別ページ」をIDの数だけ自動でループして登録
+    # ── パーティ別ページ（IDの数だけ自動生成）
     party_pages = []
     for pid in my_party_ids:
-        # st.Pageの引数にURLパラメータを仕込むことで、どのIDが選ばれたかを判定できるようにします
         page_obj = st.Page(
-            "views/party_page.py", title=f"⚔️ パーティ {pid}", icon="👥",url_path=f"party_{pid}"
+            "views/party_page.py",
+            title=f"⚔️ パーティ {pid}",
+            icon="👥",
+            url_path=f"{pid}",
         )
-        party_pages.append(page_obj)    
+        party_pages.append(page_obj)
 
-    pages_dict["パーティ別分析"] = party_pages 
+    pages_dict["パーティ別分析"] = party_pages
 
     # 4. ナビゲーションを実行（これでサイドバーが自動生成されます）
     pg = st.navigation(pages_dict)
@@ -165,4 +163,5 @@ if __name__ == "__main__":
     st.session_state["active_season"] = active_season
     st.session_state["season_list"] = season_list
     st.session_state["vs_party_pokemon"] = vs_party_pokemon
+    st.session_state["my_party_pokemon"] = my_party_pokemon
     pg.run()
