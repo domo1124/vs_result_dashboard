@@ -1,4 +1,4 @@
 data/*
 *.ini
-./party_snap_json/*
-./streamlit/secrets.toml
+party_snap_json/*
+streamlit/secrets.toml
