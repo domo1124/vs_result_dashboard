@@ -184,7 +184,7 @@ def main():
     else:
         output_filename = args.output
 
-    with open(f"./party_snap_json/{output_filename}", "w", encoding="utf-8") as f:
+    with open(f"./data/party_snap_json/{output_filename}", "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
         
     print(f"\n処理完了: {len(results)}件のデータを {output_filename} に保存しました。")
