@@ -27,20 +27,19 @@ def render_analysis_tab(df,df_vs_party,season_name):
     # has_party: party_id / party_num / pokemon_name の3カラムが最低限あればOK
     has_party = (
         df_vs_party is not None
-        and {"party_id", "party_num", "pokemon_name"}.issubset(df_vs_party.columns)
+        and {"vs_datetime_str", "party_num", "pokemon_name"}.issubset(df_vs_party.columns)
     )
 
     if has_party:
-        # 対戦記録の vs_party_id と party シートの party_id をマージ
+        # 対戦記録の vs_datetime_str と party シートの vs_datetime_str をマージ
         # → 各試合に相手パーティ6匹を紐付け
         party_long = df_vs_party.copy()
-        party_long = party_long.rename(columns={"party_id": "vs_party_id"})
-        df_with_party = df.merge(party_long[["vs_party_id","pokemon_name"]],
-                                 on="vs_party_id", how="left")
+        df_with_party = df.merge(party_long[["vs_datetime_str","pokemon_name"]],
+                                 on="vs_datetime_str", how="left")
         # 相手パーティ在籍回数（ユニークな試合×pokemon）
-        # 同一試合で同じポケモンが重複カウントされないよう VSID で dedup
+        # 同一試合で同じポケモンが重複カウントされないよう vs_datetime_str で dedup
         party_count = Counter(
-            df_with_party.drop_duplicates(subset=["VSID","pokemon_name"])
+            df_with_party.drop_duplicates(subset=["vs_datetime_str","pokemon_name"])
             ["pokemon_name"].dropna()
         )
     else:
@@ -60,7 +59,7 @@ def render_analysis_tab(df,df_vs_party,season_name):
     sel_count = Counter(vs_sel)
 
     if has_party:
-        party_poke = df_with_party.drop_duplicates(subset=["VSID","pokemon_name"])["pokemon_name"].dropna()
+        party_poke = df_with_party.drop_duplicates(subset=["vs_datetime_str","pokemon_name"])["pokemon_name"].dropna()
         party_count_for_tiebreak = Counter(party_poke)
     else:
         party_count_for_tiebreak = Counter()
@@ -217,7 +216,6 @@ with tab_battle:
 
     df_trend = df_active_season.copy()
     df_trend["date"] = pd.to_datetime(df_trend["vs_datetime"]).dt.strftime("%Y-%m-%d")
-
     # 日別集計 → 累計勝率
     daily = (df_trend.groupby("date")
              .agg(wins=("result", lambda x: (x == "WIN").sum()),
@@ -227,7 +225,6 @@ with tab_battle:
     daily["cum_total"] = daily["total"].cumsum()
     daily["wr"]        = (daily["cum_wins"] / daily["cum_total"] * 100).round(1)
     daily["daily_wr"]  = (daily["wins"] / daily["total"] * 100).round(1)
-
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=daily["date"], y=daily["wr"],
@@ -315,11 +312,8 @@ with tab_select:
         with tab:
             # フィルタリングされたデータを取得
             target_df = df[df["season"] == season]
-            target_ids = target_df['vs_party_id'].unique()
-            extracted_vs_party_df = vs_party_df[vs_party_df['party_id'].isin(target_ids)]
+            target_keys = target_df['vs_datetime_str'].unique()
+            extracted_vs_party_df = vs_party_df[vs_party_df['vs_datetime_str'].isin(target_keys)]
             
             # 関数にシーズン名を渡して描画
             render_analysis_tab(target_df,extracted_vs_party_df, season)
-
-
-

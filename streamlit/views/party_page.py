@@ -90,7 +90,7 @@ st.divider()
 # 相手の選出（long 形式）
 vs_select_long = pd.melt(
     df,
-    id_vars=["VSID", "result", "is_win", "my_select1"],
+    id_vars=["vs_datetime_str", "result", "is_win", "my_select1"],
     value_vars=["vs_select1", "vs_select2", "vs_select3"],
     var_name="slot",
     value_name="vs_pokemon",
@@ -98,7 +98,7 @@ vs_select_long = pd.melt(
  
 # 相手パーティ（party_id で結合）
 vs_merged = df.merge(
-    vs_party, left_on="vs_party_id", right_on="party_id", how="left"
+    vs_party, on="vs_datetime_str", how="left"
 )
  
 # ─────────────────────────────────────────
@@ -253,7 +253,7 @@ with tab4:
         selected = {row["vs_select1"], row["vs_select2"], row["vs_select3"]}
         selected = {p for p in selected if pd.notna(p)}
         party_members = (
-            vs_party[vs_party["party_id"] == row["vs_party_id"]]["pokemon_name"].tolist()
+            vs_party[vs_party["vs_datetime_str"] == row["vs_datetime_str"]]["pokemon_name"].tolist()
         )
         for poke in party_members:
             if poke not in selected:
@@ -280,7 +280,7 @@ with tab4:
 # ── タブ5: 組み合わせ分析 ────────────────
 with tab5:
     combo = df[["my_select1", "vs_select1", "is_win"]].copy()
-    combo["組み合わせ"] = combo["my_select1"] + " → " + combo["vs_select1"]
+    combo["組み合わせ"] = combo["my_select1"] + " × " + combo["vs_select1"]
  
     win_combo  = combo[combo["is_win"]]["組み合わせ"].value_counts().reset_index()
     loss_combo = combo[~combo["is_win"]]["組み合わせ"].value_counts().reset_index()

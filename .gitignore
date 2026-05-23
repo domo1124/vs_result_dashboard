@@ -1,4 +1,5 @@
 data/*
 *.ini
 party_snap_json/*
-streamlit/secrets.toml
+streamlit/.streamlit/secrets.toml
+secret/*
