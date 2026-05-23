@@ -139,10 +139,30 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ── タブ1: 選出率分析 ─────────────────────
 with tab1:
     # ① 選出率 TOP 10
-    select_cnt  = vs_select_long["vs_pokemon"].value_counts()
-    select_rate = (select_cnt / total * 100).round(1)
+    #   選出率 = 選出回数 / そのポケモンがパーティに入っていた対戦数
+    select_cnt = vs_select_long["vs_pokemon"].value_counts()
+
+    # パーティ在籍回数: vs_merged は battle × party_member の long 形式なので
+    # vs_datetime_str でユニーク化してからカウント
+    party_appear_cnt = (
+        vs_merged.dropna(subset=["pokemon_name"])
+        .drop_duplicates(subset=["vs_datetime_str", "pokemon_name"])
+        ["pokemon_name"]
+        .value_counts()
+    )
+
+    select_rate = (
+        (select_cnt / party_appear_cnt)
+        .dropna()
+        .mul(100)
+        .round(1)
+    )
     select_df   = (
-        pd.DataFrame({"回数": select_cnt, "選出率(%)": select_rate})
+        pd.DataFrame({
+            "回数":          select_cnt,
+            "パーティ在籍数": party_appear_cnt,
+            "選出率(%)":     select_rate,
+        })
         .nlargest(10, "回数")
         .reset_index()
         .rename(columns={"vs_pokemon": "ポケモン"})
