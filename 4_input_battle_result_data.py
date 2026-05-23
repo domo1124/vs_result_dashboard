@@ -1,40 +1,3 @@
-"""
-record_battles.py
-ポケモン対戦動画を確認しながら対戦データを記録するスクリプト
-
-【動作フロー】
-  動画を開く → CUIで入力（動画を見ながら）→ 内容確認 → 次の動画へ
-
-【ディレクトリ構造】
-  data/
-  └── {account}/
-      └── {yyyymmdd}/
-          ├── videos/       ← mp4 を格納
-          └── screenshots/  ← capture スクリプトの出力先
-
-【設定ファイル】config.ini（--config で変更可）
-  [spreadsheet]
-  url               = https://docs.google.com/spreadsheets/d/SPREADSHEET_ID
-  credentials       = ./credentials.json
-  battle_result_gid = 0
-  vs_party_gid      = 111111111
-  my_party_gid      = 222222222
-  season_gid        = 333333333
-
-  [data]
-  data_dir   = ./data
-  sqlite     = ./pokemon_battles.db
-  party_json = ./json_snap
-
-Usage:
-    python record_battles.py <date> [--rank RANK] [--config CONFIG]
-
-Examples:
-    python record_battles.py 20260511 --rank s
-    python record_battles.py 2026-05-11
-    python record_battles.py 2026/05/11 --rank mo --config my_config.ini
-"""
-
 import argparse
 import configparser
 import re
@@ -94,7 +57,7 @@ def load_config(config_path: str) -> configparser.ConfigParser:
 def parse_filename_and_calc_time(basename: str) -> str | None:
     """
     ファイル名から vs_datetime を抽出する。
-    例: "2026-05-11 18-39-56-00.08.37.529" → "20260511_184933_529"
+    例: "2026-05-11 18-39-56-00.08.37.529" → "20260511_184933"
     """
     match = re.match(
         r"(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})-(\d{2}\.\d{2}\.\d{2}\.\d{3})",
@@ -109,7 +72,7 @@ def parse_filename_and_calc_time(basename: str) -> str | None:
     h, m, s, ms  = map(int, offset_str.split("."))
     offset_delta = timedelta(hours=h, minutes=m, seconds=s, milliseconds=ms)
     final_time   = start_dt + offset_delta + timedelta(seconds=2)
-    return final_time.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    return final_time.strftime("%Y%m%d_%H%M%S")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,11 +104,6 @@ def get_current_season(df: pd.DataFrame, date_str: datetime) -> str:
 # SQLite
 # ─────────────────────────────────────────────────────────────────────────────
 def init_db(conn: sqlite3.Connection) -> None:
-    """
-    テーブルが存在しない場合のみ作成する。
-    - battle_result  : vs_datetime が PRIMARY KEY（VSID廃止）
-    - vs_party_pokemon: vs_datetime で battle_result と紐づく（party_id廃止）
-    """
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS battle_result (
             vs_datetime  TEXT PRIMARY KEY,
@@ -353,10 +311,10 @@ def sync_to_spreadsheet(
             # truncate → ヘッダー + 全レコードを書き込む
             ws.clear()
             if df.empty:
-                ws.update(values=[df.columns.tolist()], range_name="A1")
+                ws.update(range_name="A1",values=[df.columns.tolist()])
             else:
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
-                ws.update(values=data, range_name="A1")
+                ws.update(range_name="A1", values=data)
 
             print(f"  ✓ SS同期完了 [{sheet_name}]: {len(df)} 件")
 
@@ -482,8 +440,22 @@ def prompt_party_id(conn: sqlite3.Connection) -> str:
         print(f"  ✗ パーティID '{val}' はDBに存在しないかメンバーが不足しています")
 
 
-def prompt_my_selection(label: str) -> list[int]:
-    """自分の選出: カンマ区切り3つ(1-6)"""
+def prompt_my_selection(
+    label: str,
+    conn: sqlite3.Connection,
+    party_id: str,
+) -> list[int]:
+    """自分の選出: カンマ区切り3つ(1-6)。入力前にパーティのポケモン名一覧を表示する"""
+    # パーティメンバーを party_num 順に取得して表示
+    rows = conn.execute(
+        "SELECT party_num, pokemon_name FROM my_party_pokemon "
+        "WHERE party_id = ? ORDER BY party_num",
+        (party_id,),
+    ).fetchall()
+    print(f"  ─ 自分のパーティ ({party_id}) ─")
+    for row in rows:
+        print(f"    {row[0]}: {row[1]}")
+
     def validate(val: str) -> bool:
         parts = [p.strip() for p in val.split(",")]
         if len(parts) != 3:
@@ -501,8 +473,23 @@ def prompt_my_selection(label: str) -> list[int]:
     return [int(p.strip()) for p in val.split(",")]
 
 
-def prompt_vs_selection(label: str) -> list[int | None]:
-    """相手の選出: カンマ区切り1〜3つ(1-6)、不足分は None で補完"""
+def prompt_vs_selection(
+    label: str,
+    snaps: dict,
+    vs_datetime: str,
+) -> list[int | None]:
+    """相手の選出: カンマ区切り1〜3つ(1-6)、不足分は None で補完。
+    入力前に JSON スナップから相手パーティのポケモン名一覧を party_num 順に表示する"""
+    # JSON スナップから相手パーティを取得して表示
+    time_pattern = re.compile(r"(\d{8}_\d{6})")
+    match        = time_pattern.search(vs_datetime)
+    key          = match.group(1) if match else vs_datetime
+    entry        = snaps.get(key, {})
+    print("  ─ 相手のパーティ ─")
+    for i in range(1, 7):
+        name = entry.get(f"pokemon_{i}", "（不明）")
+        print(f"    {i}: {name}")
+
     def validate(val: str) -> bool:
         parts = [p.strip() for p in val.split(",")]
         if len(parts) == 0:
@@ -570,20 +557,20 @@ def input_one_battle(
         if skip_check == "s":
             return None
 
-        # ── 対戦結果
-        result = prompt_result()
-
         # ── ランク
         rank = fixed_rank if fixed_rank else prompt_rank()
 
         # ── 自分のパーティID
         my_party_id = prompt_party_id(conn)
 
-        # ── 自分の選出（3つ必須）
-        my_indices = prompt_my_selection("自分の選出 (party_num)")
+        # ── 自分の選出（3つ必須）: パーティのポケモン名を表示してから入力
+        my_indices = prompt_my_selection("自分の選出 (party_num)", conn, my_party_id)
 
-        # ── 相手の選出（1〜3つ許容）
-        vs_indices = prompt_vs_selection("相手の選出 (JSON pokemon番号)")
+        # ── 相手の選出（1〜3つ許容）: JSON スナップのポケモン名を表示してから入力
+        vs_indices = prompt_vs_selection("相手の選出 (JSON pokemon番号)", snaps, vs_datetime)
+
+        # ── 対戦結果（相手の選出確認後に入力）
+        result = prompt_result()
 
         # ── 自分のポケモン名を DB から取得
         my_pokemons = get_my_pokemon(conn, my_party_id, my_indices)

@@ -3,8 +3,8 @@ import glob
 import json
 import os
 import re
-import shutil  # 追加：ファイルの移動用
-import time  # 追加：待機時間（sleep）用
+import shutil 
+import time 
 from datetime import datetime
 from enum import Enum
 from PIL import Image
