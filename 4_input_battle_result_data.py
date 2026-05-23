@@ -708,7 +708,7 @@ def main() -> None:
     print(f"  動画ファイル数  : {len(mp4_files)} 件")
     print(f"  DB              : {db_path}")
     print(f"  JSONスナップ    : {len(snaps)} 件  ({json_snap_dir})")
-    print(f"  ランク          : {args.rank if args.rank else '都度入力'}")
+    print(f"  ランク          : {RANK_LABELS[args.rank] if args.rank else '都度入力'}")
     print(SEP_HEAVY)
 
     existing         = get_existing_vs_datetimes(conn) if args.skip_existing else set()
@@ -746,7 +746,7 @@ def main() -> None:
         open_video_windows(mp4_path)
 
         result = input_one_battle(
-            conn, snaps, vs_datetime, target_season, args.rank
+            conn, snaps, vs_datetime, target_season, RANK_LABELS[args.rank]
         )
 
         if result is None:
