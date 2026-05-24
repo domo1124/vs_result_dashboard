@@ -35,8 +35,9 @@ def load_config(config_path: str) -> configparser.ConfigParser:
     config.read(config_path, encoding="utf-8")
 
     required: dict[str, list[str]] = {
-        "spreadsheet": ["url", "credentials", "battle_result_gid",
-                        "vs_party_gid", "my_party_gid", "season_gid"],
+        "spreadsheet": ["id", "credentials",
+                        "battle_result_sheet", "vs_party_sheet",
+                        "my_party_sheet", "season_sheet"],
         "data"        : ["data_dir", "sqlite", "party_json"],
     }
     for section, keys in required.items():
@@ -167,7 +168,6 @@ def get_my_pokemon(
 def save_records(
     conn: sqlite3.Connection,
     records: list[dict],
-    vs_party_records: list[dict],
 ) -> None:
     """
     battle_result と vs_party_pokemon を一括保存する。
@@ -188,15 +188,6 @@ def save_records(
         """,
         records,
     )
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO vs_party_pokemon
-            (vs_datetime, party_num, item_name, pokemon_name)
-        VALUES
-            (:vs_datetime, :party_num, :item_name, :pokemon_name)
-        """,
-        vs_party_records,
-    )
     conn.commit()
 
 
@@ -212,18 +203,6 @@ def _get_gspread():
         print("[ERROR] gspread がインストールされていません。")
         print("        pip install gspread でインストールしてください。")
         sys.exit(1)
-
-
-def _extract_spreadsheet_id(url: str) -> str:
-    """
-    https://docs.google.com/spreadsheets/d/SPREADSHEET_ID
-    から SPREADSHEET_ID を抽出する。
-    """
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
-    if not match:
-        raise ValueError(f"スプレッドシートIDをURLから抽出できません: {url}")
-    return match.group(1)
-
 
 def get_gspread_client(credentials_path: str):
     """
@@ -325,39 +304,103 @@ def sync_to_spreadsheet(
 # ─────────────────────────────────────────────────────────────────────────────
 # JSON スナップ
 # ─────────────────────────────────────────────────────────────────────────────
-def load_json_snaps(json_dir: str) -> dict:
-    """json_snap/ 配下の全JSONを読み込み {vs_date: entry} の辞書を返す"""
-    snaps: dict = {}
+def import_json_snaps_to_db(json_dir: str, conn: sqlite3.Connection) -> int:
+    """
+    json_dir 配下の全 JSON を読み込み、vs_party_pokemon テーブルに保存する。
+    - vs_datetime が既存の場合はスキップ（重複保存なし）
+    - 保存に成功した JSON ファイルは <json_dir>/done/ へ移動する
+    - 保存件数を返す
+    """
+    import shutil
     if not os.path.isdir(json_dir):
         print(f"  [WARNING] JSONディレクトリが見つかりません: {json_dir}")
-        return snaps
+        return 0
+
+    done_dir = os.path.join(json_dir, "done")
+    os.makedirs(done_dir, exist_ok=True)
+
+    saved_total = 0
 
     for jf in sorted(glob.glob(os.path.join(json_dir, "*.json"))):
         try:
             with open(jf, encoding="utf-8") as f:
                 data = json.load(f)
-            entries = data if isinstance(data, list) else [data]
-            for entry in entries:
-                key = entry.get("vs_date")
-                if key:
-                    snaps[key] = entry
         except (json.JSONDecodeError, OSError) as e:
             print(f"  [WARNING] JSON読み込み失敗: {jf} ({e})")
+            continue
 
-    return snaps
+        entries = data if isinstance(data, list) else [data]
+        saved_in_file = 0
+
+        for entry in entries:
+            vs_datetime = entry.get("vs_date")
+            if not vs_datetime:
+                continue
+
+            # 既存チェック: vs_datetime が既に vs_party_pokemon にある場合はスキップ
+            exists = conn.execute(
+                "SELECT 1 FROM vs_party_pokemon WHERE vs_datetime = ? LIMIT 1",
+                (vs_datetime,),
+            ).fetchone()
+            if exists:
+                continue
+
+            # pokemon_1〜6 を vs_party_pokemon テーブルへ保存
+            rows = []
+            for party_num in range(1, 7):
+                rows.append({
+                    "vs_datetime" : vs_datetime,
+                    "party_num"   : party_num,
+                    "item_name"   : None,
+                    "pokemon_name": entry.get(f"pokemon_{party_num}"),
+                })
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO vs_party_pokemon
+                    (vs_datetime, party_num, item_name, pokemon_name)
+                VALUES
+                    (:vs_datetime, :party_num, :item_name, :pokemon_name)
+                """,
+                rows,
+            )
+            conn.commit()
+            saved_in_file += 1
+
+        saved_total += saved_in_file
+
+        # ファイル内の全エントリが DB に保存済み（または今回保存した）なら done へ移動
+        all_stored = all(
+            conn.execute(
+                "SELECT 1 FROM vs_party_pokemon WHERE vs_datetime = ? LIMIT 1",
+                (e.get("vs_date"),),
+            ).fetchone()
+            for e in entries if e.get("vs_date")
+        )
+        if all_stored:
+            dest = os.path.join(done_dir, os.path.basename(jf))
+            shutil.move(jf, dest)
+            print(f"  -> done へ移動: {os.path.basename(jf)}  ({saved_in_file} 件新規保存)")
+        else:
+            print(f"  -> 一部スキップ（未処理エントリあり）: {os.path.basename(jf)}")
+
+    return saved_total
 
 
-def get_vs_from_snap(
-    snaps: dict, vs_datetime: str, indices: list[int]
+def get_vs_from_db(
+    conn: sqlite3.Connection, vs_datetime: str, indices: list[int]
 ) -> tuple[list[str | None], dict]:
-    time_pattern    = re.compile(r"(\d{8}_\d{6})")
-    match           = time_pattern.search(vs_datetime)
-    vs_time_replace = match.group(1) if match else vs_datetime
-    entry    = snaps.get(vs_time_replace, {})
-    pokemons = [
-        val if (val := entry.get(f"pokemon_{i}")) is not None else None
-        for i in indices
-    ]
+    """
+    vs_party_pokemon テーブルから vs_datetime に対応するパーティを取得し、
+    indices で指定された party_num のポケモン名リストと全パーティ dict を返す。
+    """
+    rows = conn.execute(
+        "SELECT party_num, pokemon_name FROM vs_party_pokemon "
+        "WHERE vs_datetime = ? ORDER BY party_num",
+        (vs_datetime,),
+    ).fetchall()
+    entry = {f"pokemon_{r[0]}": r[1] for r in rows}
+    print(entry)
+    pokemons = [entry.get(f"pokemon_{i}") for i in indices]
     return pokemons, entry
 
 
@@ -475,19 +518,21 @@ def prompt_my_selection(
 
 def prompt_vs_selection(
     label: str,
-    snaps: dict,
+    conn: sqlite3.Connection,
     vs_datetime: str,
 ) -> list[int | None]:
     """相手の選出: カンマ区切り1〜3つ(1-6)、不足分は None で補完。
-    入力前に JSON スナップから相手パーティのポケモン名一覧を party_num 順に表示する"""
-    # JSON スナップから相手パーティを取得して表示
-    time_pattern = re.compile(r"(\d{8}_\d{6})")
-    match        = time_pattern.search(vs_datetime)
-    key          = match.group(1) if match else vs_datetime
-    entry        = snaps.get(key, {})
+    入力前に SQLite の vs_party_pokemon から相手パーティのポケモン名一覧を表示する"""
+    # SQLite から相手パーティを取得して表示
+    rows = conn.execute(
+        "SELECT party_num, pokemon_name FROM vs_party_pokemon "
+        "WHERE vs_datetime = ? ORDER BY party_num",
+        (vs_datetime,),
+    ).fetchall()
+    entry = {int(r[0]): r[1] for r in rows}
     print("  ─ 相手のパーティ ─")
     for i in range(1, 7):
-        name = entry.get(f"pokemon_{i}", "（不明）")
+        name = entry.get(i, "（不明）")
         print(f"    {i}: {name}")
 
     def validate(val: str) -> bool:
@@ -540,7 +585,6 @@ def confirm_record(record: dict) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 def input_one_battle(
     conn: sqlite3.Connection,
-    snaps: dict,
     vs_datetime: str,
     target_season: str,
     fixed_rank: str | None,
@@ -549,6 +593,7 @@ def input_one_battle(
     動画1本分のデータを CUI で入力し、確認後に (battle_record, vs_party_records) を返す。
     's' でスキップ(None返却) / 確認で 'n' を選ぶと最初からやり直す。
 
+    相手パーティは SQLite の vs_party_pokemon テーブルから取得する。
     vs_party_records は vs_datetime をキーとして vs_party_pokemon に保存する6行。
     """
     while True:
@@ -567,7 +612,7 @@ def input_one_battle(
         my_indices = prompt_my_selection("自分の選出 (party_num)", conn, my_party_id)
 
         # ── 相手の選出（1〜3つ許容）: JSON スナップのポケモン名を表示してから入力
-        vs_indices = prompt_vs_selection("相手の選出 (JSON pokemon番号)", snaps, vs_datetime)
+        vs_indices = prompt_vs_selection("相手の選出 (JSON pokemon番号)", conn, vs_datetime)
 
         # ── 対戦結果（相手の選出確認後に入力）
         result = prompt_result()
@@ -576,8 +621,8 @@ def input_one_battle(
         my_pokemons = get_my_pokemon(conn, my_party_id, my_indices)
         my_select1, my_select2, my_select3 = my_pokemons
 
-        # ── 相手ポケモンを JSON から取得
-        vs_pokemons, vs_entry = get_vs_from_snap(snaps, vs_datetime, vs_indices)
+        # ── 相手ポケモンを DB から取得
+        vs_pokemons, vs_entry = get_vs_from_db(conn, vs_datetime, vs_indices)
         vs_select1, vs_select2, vs_select3 = vs_pokemons
 
         if not vs_entry:
@@ -646,9 +691,8 @@ def main() -> None:
     # ── 設定ファイル読み込み ──────────────────────────────────────────────────
     config           = load_config(args.config)
     spreadsheet_info = config["spreadsheet"]
-    base_url         = spreadsheet_info["url"]
+    spreadsheet_id   = spreadsheet_info["id"]
     credentials_path = spreadsheet_info["credentials"]
-    spreadsheet_id   = _extract_spreadsheet_id(base_url)
 
     data_info     = config["data"]
     data_dir      = data_info["data_dir"]
@@ -681,23 +725,25 @@ def main() -> None:
     init_db(conn)
 
     print("  スプレッドシートからデータを読み込み中...")
-    battle_result_df = read_sheet_as_df(gc, spreadsheet_id, "battle_result")
+    battle_result_df = read_sheet_as_df(gc, spreadsheet_id, spreadsheet_info["battle_result_sheet"])
     battle_result_df.to_sql("battle_result", con=conn, if_exists="replace", index=False)
     print("  battle_result を更新しました。")
 
-    my_party_df = read_sheet_as_df(gc, spreadsheet_id, "my_party_pokemon")
+    my_party_df = read_sheet_as_df(gc, spreadsheet_id, spreadsheet_info["my_party_sheet"])
     my_party_df.to_sql("my_party_pokemon", con=conn, if_exists="replace", index=False)
     print("  my_party_pokemon を更新しました。")
 
-    vs_party_df = read_sheet_as_df(gc, spreadsheet_id, "vs_party_pokemon")
+    vs_party_df = read_sheet_as_df(gc, spreadsheet_id, spreadsheet_info["vs_party_sheet"])
     vs_party_df.to_sql("vs_party_pokemon", con=conn, if_exists="replace", index=False)
     print("  vs_party_pokemon を更新しました。")
 
-    season_df     = read_sheet_as_df(gc, spreadsheet_id, "season", dtype=None)
+    season_df     = read_sheet_as_df(gc, spreadsheet_id, spreadsheet_info["season_sheet"], dtype=None)
     target_season = get_current_season(season_df, target_date)
 
-    # ── 3. JSON スナップ読み込み ──────────────────────────────────────────────
-    snaps = load_json_snaps(json_snap_dir)
+    # ── 3. JSON スナップを SQLite に取り込み（vs_party_pokemon に保存） ─────────
+    print("  JSONスナップを読み込み中...")
+    snap_saved = import_json_snaps_to_db(json_snap_dir, conn)
+    print(f"  JSONスナップ: {snap_saved} 件 新規保存（done へ移動済み）")
 
     # 起動サマリー
     print()
@@ -707,7 +753,7 @@ def main() -> None:
     print(f"  シーズン        : {target_season}")
     print(f"  動画ファイル数  : {len(mp4_files)} 件")
     print(f"  DB              : {db_path}")
-    print(f"  JSONスナップ    : {len(snaps)} 件  ({json_snap_dir})")
+    print(f"  JSONスナップ dir: {json_snap_dir}")
     print(f"  ランク          : {RANK_LABELS[args.rank] if args.rank else '都度入力'}")
     print(SEP_HEAVY)
 
@@ -746,7 +792,7 @@ def main() -> None:
         open_video_windows(mp4_path)
 
         result = input_one_battle(
-            conn, snaps, vs_datetime, target_season, RANK_LABELS[args.rank]
+            conn, vs_datetime, target_season, RANK_LABELS[args.rank]
         )
 
         if result is None:
@@ -769,7 +815,7 @@ def main() -> None:
     print()
     print(SEP_HEAVY)
     if records:
-        save_records(conn, records, all_vs_party_rec)
+        save_records(conn, records)
         print(f"  ✓ 対戦記録    : {len(records)} 件 → {db_path}")
         print(f"  ✓ 相手パーティ: {len(all_vs_party_rec)} 行")
 
