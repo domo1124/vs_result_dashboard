@@ -12,19 +12,36 @@ from pydantic import BaseModel
 from google import genai
 import configparser
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
 config = configparser.ConfigParser()
 config_file = 'config.ini'
 config.read(config_file, encoding='utf-8')
 spreadsheet_info = config['spreadsheet']
-pokemon_list_url = f"{spreadsheet_info['url']}{spreadsheet_info['pokemon_list_export_csv']}" 
 gemini_api_key = config['gemini']['api_key']
 gemini_model = config['gemini']['model']
+
 # ==========================================
-# 1. ポケモン一覧リスト
+# 1. ポケモン一覧リスト（サービスアカウントで読み込み）
 # ==========================================
-df = pd.read_csv(pokemon_list_url)
-ALLOW_POKEMON_LIST = df['pokemon_name'].tolist()
+def _load_pokemon_list() -> list[str]:
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    credentials_path = spreadsheet_info["credentials"]
+    creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
+    gc    = gspread.authorize(creds)
+
+    spreadsheet_id = spreadsheet_info["id"]
+    sheet_name     = spreadsheet_info.get("pokemon_list_sheet")
+    ws             = gc.open_by_key(spreadsheet_id).worksheet(sheet_name)
+
+    df = pd.DataFrame(ws.get_all_records())
+    return df["pokemon_name"].dropna().tolist()
+
+ALLOW_POKEMON_LIST = _load_pokemon_list()
 pokemon_list_text = "\n".join(ALLOW_POKEMON_LIST)
 
 # 2. 生成したEnumを型として指定
