@@ -104,7 +104,7 @@ vs_merged = df.merge(
 # ─────────────────────────────────────────
 # ヘルパー関数
 # ─────────────────────────────────────────
-def bar_chart(series: pd.Series, title: str, color: str = "#378ADD", top_n: int = 10):
+def bar_chart(series: pd.Series, title: str, color: str = "#378ADD", top_n: int = 15):
     """上位 top_n の横棒グラフを返す"""
     plot_df = series.nlargest(top_n).reset_index()
     plot_df.columns = ["ポケモン", "回数"]
@@ -163,7 +163,7 @@ with tab1:
             "パーティ在籍数": party_appear_cnt,
             "選出率(%)":     select_rate,
         })
-        .nlargest(10, "回数")
+        .nlargest(15, "回数")
         .reset_index()
         .rename(columns={"vs_pokemon": "ポケモン"})
     )
@@ -178,18 +178,23 @@ with tab1:
  
     st.divider()
  
-    # ⑥ 相手初手 TOP 10（全試合）
+    # ⑥ 相手初手 TOP 15（全試合）
     c3, c4 = st.columns(2)
     first_cnt = df["vs_select1"].value_counts()
+    # 初手出現率 = そのポケモンが選出された試合のうち最初に出てきた割合
+    # 分母: select_cnt（そのポケモンが選出された回数）
+    first_rate = (first_cnt / select_cnt * 100).round(1)
+    first_df = (
+        pd.DataFrame({"回数": first_cnt, "選出回数": select_cnt, "初手出現率(%)": first_rate})
+        .nlargest(15, "回数")
+        .reset_index()
+        .rename(columns={"vs_select1": "ポケモン"})
+    )
     with c3:
-        st.markdown("**⑥ 相手が最初に出してきたポケモン TOP 10**")
-        st.dataframe(
-            first_cnt.nlargest(10).reset_index()
-                .rename(columns={"vs_select1": "ポケモン", "count": "回数"}),
-            use_container_width=True, hide_index=True,
-        )
+        st.markdown("**⑥ 相手が最初に出してきたポケモン TOP 15**")
+        st.dataframe(first_df, use_container_width=True, hide_index=True)
     with c4:
-        st.plotly_chart(bar_chart(first_cnt, "相手初手 TOP 10", "#7F77DD"),
+        st.plotly_chart(bar_chart(first_cnt, "相手初手 TOP 15", "#7F77DD"),
                         use_container_width=True)
  
 # ── タブ2: WIN / LOSS 比較 ───────────────
@@ -229,7 +234,7 @@ with tab2:
     compare = pd.DataFrame({
         "WIN時選出":  win_sel["vs_pokemon"].value_counts(),
         "LOSS時選出": loss_sel["vs_pokemon"].value_counts(),
-    }).fillna(0).astype(int).sort_values("WIN時選出", ascending=False).head(20)
+    }).fillna(0).astype(int).sort_values("WIN時選出", ascending=False).head(15)
     st.dataframe(compare, use_container_width=True)
  
 # ── タブ3: 初手分析 ──────────────────────
@@ -255,7 +260,7 @@ with tab3:
         .agg(対戦数=("is_win", "count"), 勝利数=("is_win", "sum"))
         .assign(勝率=lambda x: (x["勝利数"] / x["対戦数"] * 100).round(1))
         .sort_values("対戦数", ascending=False)
-        .head(20)
+        .head(15)
         .reset_index()
         .rename(columns={"vs_select1": "相手初手"})
     )
@@ -284,18 +289,44 @@ with tab4:
     with c1:
         st.plotly_chart(
             bar_chart(not_first_cnt,
-                      "⑦ 選出されたが初手に出なかった TOP 10", "#BA7517"),
+                      "⑦ 選出されたが初手に出なかった TOP 15", "#BA7517"),
             use_container_width=True,
         )
     with c2:
         if not not_sel_df.empty:
+            noshow_cnt = not_sel_df["pokemon"].value_counts()
             st.plotly_chart(
-                bar_chart(not_sel_df["pokemon"].value_counts(),
-                          "⑧ パーティにいて出てこなかった TOP 10", "#888780"),
+                bar_chart(noshow_cnt,
+                          "⑧ パーティにいて出てこなかった TOP 15", "#888780"),
                 use_container_width=True,
             )
         else:
-            st.info("vs_party_pokemon.csv との紐付けデータが不足しています。")
+            st.info("vs_party_pokemon との紐付けデータが不足しています。")
+
+    # ⑧ 補足テーブル: ポケモン名 / パーティ在籍回数 / 非選出率
+    if not not_sel_df.empty:
+        st.markdown("**⑧ パーティにいて出てこなかったポケモン 詳細**")
+        noshow_cnt   = not_sel_df["pokemon"].value_counts()
+        # パーティ在籍回数は vs_merged から算出（タブ1と同じロジック）
+        noshow_party = (
+            vs_merged.dropna(subset=["pokemon_name"])
+            .drop_duplicates(subset=["vs_datetime_str", "pokemon_name"])
+            ["pokemon_name"]
+            .value_counts()
+        )
+        # 非選出率 = パーティにいて出てこなかった回数 / パーティ在籍回数
+        noshow_rate = (noshow_cnt / noshow_party * 100).round(1)
+        noshow_table = (
+            pd.DataFrame({
+                "非選出回数":       noshow_cnt,
+                "パーティ在籍回数": noshow_party,
+                "非選出率(%)":      noshow_rate,
+            })
+            .nlargest(15, "非選出回数")
+            .reset_index()
+            .rename(columns={"pokemon": "ポケモン"})
+        )
+        st.dataframe(noshow_table, use_container_width=True, hide_index=True)
  
 # ── タブ5: 組み合わせ分析 ────────────────
 with tab5:
@@ -334,7 +365,7 @@ with tab5:
         .agg(対戦数=("is_win", "count"), 勝利数=("is_win", "sum"))
         .assign(勝率=lambda x: (x["勝利数"] / x["対戦数"] * 100).round(1))
         .sort_values("対戦数", ascending=False)
-        .head(20)
+        .head(15)
         .reset_index()
     )
     st.dataframe(combo_stats, use_container_width=True, hide_index=True)
