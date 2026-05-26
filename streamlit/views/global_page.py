@@ -178,35 +178,59 @@ def render_analysis_tab(df,df_vs_party,season_name):
                 for combo in combinations(sorted(poke_list), 3):
                     combo_counter[combo] += 1
 
+        # 実際に選出された3体の組み合わせ（順不同）をカウント
+        select_combo_counter: Counter = Counter()
+        for _, row in df.iterrows():
+            sel = sorted(filter(pd.notna, [row.get("vs_select1"), row.get("vs_select2"), row.get("vs_select3")]))
+            if len(sel) == 3:
+                select_combo_counter[tuple(sel)] += 1
+
         if combo_counter:
-            combo_df = (
-                pd.DataFrame(
-                    [(f"{a} / {b} / {c}", cnt)
-                     for (a, b, c), cnt in combo_counter.most_common(20)],
-                    columns=["組み合わせ", "回数"],
-                )
+            top20 = combo_counter.most_common(20)
+            combo_df = pd.DataFrame(
+                [(f"{a} / {b} / {c}", party_cnt, select_combo_counter.get((a, b, c), 0))
+                 for (a, b, c), party_cnt in top20],
+                columns=["組み合わせ", "パーティ内回数", "選出回数"],
+            )
+            combo_df["選出率(%)"] = (
+                (combo_df["選出回数"] / combo_df["パーティ内回数"].replace(0, pd.NA) * 100)
+                .round(1)
             )
             combo_df.index += 1
 
-            fig4 = go.Figure(go.Bar(
-                x=combo_df["回数"][::-1],
+            # グラフ: パーティ内回数（棒）＋選出回数（棒）を並べて表示
+            fig4 = go.Figure()
+            fig4.add_trace(go.Bar(
+                x=combo_df["パーティ内回数"][::-1],
                 y=combo_df["組み合わせ"][::-1],
                 orientation="h",
-                marker=dict(
-                    color=combo_df["回数"][::-1],
-                    colorscale=[[0,"#1e1030"],[1,"#c96aff"]],
-                ),
-                text=combo_df["回数"][::-1].astype(str) + "回",
+                name="パーティ内回数",
+                marker=dict(color=combo_df["パーティ内回数"][::-1],
+                            colorscale=[[0,"#1e1030"],[1,"#c96aff"]]),
+                hovertemplate="%{y}<br>パーティ内: %{x}回<extra></extra>",
+            ))
+            fig4.add_trace(go.Bar(
+                x=combo_df["選出回数"][::-1],
+                y=combo_df["組み合わせ"][::-1],
+                orientation="h",
+                name="選出回数",
+                marker_color="#ff8c42",
+                text=combo_df["選出率(%)"][::-1].astype(str) + "%",
                 textposition="outside",
-                hovertemplate="%{y}<br>%{x}回<extra></extra>",
+                hovertemplate="%{y}<br>選出: %{x}回<extra></extra>",
             ))
             fig4.update_layout(
                 **PLOTLY_BASE,
-                height=max(400, len(combo_df) * 28 + 60),
+                barmode="overlay",
+                height=max(400, len(combo_df) * 32 + 60),
                 xaxis=dict(gridcolor="#1e1e32"),
                 yaxis=dict(tickfont=dict(size=11)),
+                legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0),
             )
             st.plotly_chart(fig4, use_container_width=True, key=f"fig4_{season_name}")
+
+            with st.expander("3体組み合わせ テーブルで確認"):
+                st.dataframe(combo_df, use_container_width=True)
         else:
             st.info("組み合わせデータが不足しています。")
     else:
@@ -237,13 +261,20 @@ def render_analysis_tab(df,df_vs_party,season_name):
                 st.dataframe(party_df.rename(columns={"pokemon":"ポケモン","count":"在籍数"}),
                              hide_index=False)
         with c3:
-            st.caption("先発 TOP15（パーティ在籍時の先発率）")
-            # 先発率 = 先発回数 / パーティ在籍回数
+            st.caption("先発 TOP15（先発率: 在籍分母 / 選出分母）")
+            # 先発率① = 先発回数 / パーティ在籍回数
+            # 先発率② = 先発回数 / 選出回数（実際に選出された試合のうち先発した割合）
             party_cnt_series = pd.Series(dict(party_count_for_tiebreak)) if has_party else pd.Series(dtype=float)
+            sel_cnt_series   = pd.Series(dict(sel_count))
             lead_table = lead_df[["pokemon","count"]].copy()
             lead_table["在籍数"] = lead_table["pokemon"].map(party_cnt_series)
-            lead_table["先発率(%)"] = (
+            lead_table["選出数"] = lead_table["pokemon"].map(sel_cnt_series)
+            lead_table["先発率/在籍(%)"] = (
                 (lead_table["count"] / lead_table["在籍数"].replace(0, pd.NA) * 100)
+                .round(1)
+            )
+            lead_table["先発率/選出(%)"] = (
+                (lead_table["count"] / lead_table["選出数"].replace(0, pd.NA) * 100)
                 .round(1)
             )
             st.dataframe(
@@ -259,27 +290,8 @@ vs_party_df = st.session_state.get("vs_party_pokemon")
 st.set_page_config(page_title="Battle Dashboard", layout="wide")
 
 # つくりたい2つのタブを定義
-tab_battle, tab_select = st.tabs(["対戦成績", "選出ポケモン分析"])
+tab_select,tab_battle  = st.tabs(["選出ポケモン分析","対戦成績"])
 
-# ================================================================
-# ② 選出分析タブ
-# ================================================================
-with tab_select:
-    target_list = []
-    target_list.append(active_season)
-    for i in reversed(season_list):
-        target_list.append(i)
-    tabs = st.tabs(target_list)
-    for tab, season in zip(tabs, target_list):
-        with tab:
-            # フィルタリングされたデータを取得
-            target_df = df[df["season"] == season]
-            target_keys = target_df['vs_datetime_str'].unique()
-            extracted_vs_party_df = vs_party_df[vs_party_df['vs_datetime_str'].isin(target_keys)]
-            
-            # 関数にシーズン名を渡して描画
-            render_analysis_tab(target_df,extracted_vs_party_df, season)
-            
 # ================================================================
 # ① 対戦成績タブ
 # ================================================================
@@ -392,3 +404,22 @@ with tab_battle:
         </div>
         """
         st.markdown(html, unsafe_allow_html=True)
+
+# ================================================================
+# ② 選出分析タブ
+# ================================================================
+with tab_select:
+    target_list = []
+    target_list.append(active_season)
+    for i in reversed(season_list):
+        target_list.append(i)
+    tabs = st.tabs(target_list)
+    for tab, season in zip(tabs, target_list):
+        with tab:
+            # フィルタリングされたデータを取得
+            target_df = df[df["season"] == season]
+            target_keys = target_df['vs_datetime_str'].unique()
+            extracted_vs_party_df = vs_party_df[vs_party_df['vs_datetime_str'].isin(target_keys)]
+            
+            # 関数にシーズン名を渡して描画
+            render_analysis_tab(target_df,extracted_vs_party_df, season)
