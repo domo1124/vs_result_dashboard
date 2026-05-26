@@ -229,7 +229,44 @@ def render_analysis_tab(df,df_vs_party,season_name):
             )
             st.plotly_chart(fig4, use_container_width=True, key=f"fig4_{season_name}")
 
-            with st.expander("3体組み合わせ テーブルで確認"):
+            # 実際に選出された3体組み合わせ TOP20（独立グラフ）
+            st.markdown("#### 🟠 実際に選出された3体組み合わせ TOP 20（順不同）")
+            sel_combo_top20 = select_combo_counter.most_common(20)
+            if sel_combo_top20:
+                sel_combo_df = pd.DataFrame(
+                    [(f"{a} / {b} / {c}", cnt)
+                     for (a, b, c), cnt in sel_combo_top20],
+                    columns=["組み合わせ", "選出回数"],
+                )
+                sel_combo_df["選出率(%)"] = (
+                    (sel_combo_df["選出回数"] / total_battles * 100).round(1)
+                )
+                sel_combo_df.index += 1
+
+                fig5 = go.Figure(go.Bar(
+                    x=sel_combo_df["選出回数"][::-1],
+                    y=sel_combo_df["組み合わせ"][::-1],
+                    orientation="h",
+                    marker=dict(
+                        color=sel_combo_df["選出回数"][::-1],
+                        colorscale=[[0,"#201510"],[1,"#ff8c42"]],
+                    ),
+                    text=sel_combo_df["選出率(%)"][::-1].astype(str) + "%",
+                    textposition="outside",
+                    hovertemplate="%{y}<br>選出: %{x}回<extra></extra>",
+                ))
+                fig5.update_layout(
+                    **PLOTLY_BASE,
+                    height=max(400, len(sel_combo_df) * 32 + 60),
+                    xaxis=dict(gridcolor="#1e1e32"),
+                    yaxis=dict(tickfont=dict(size=11)),
+                )
+                st.plotly_chart(fig5, use_container_width=True, key=f"fig5_{season_name}")
+
+                with st.expander("選出3体組み合わせ テーブルで確認"):
+                    st.dataframe(sel_combo_df, use_container_width=True)
+
+            with st.expander("パーティ3体組み合わせ テーブルで確認"):
                 st.dataframe(combo_df, use_container_width=True)
         else:
             st.info("組み合わせデータが不足しています。")
@@ -290,7 +327,7 @@ vs_party_df = st.session_state.get("vs_party_pokemon")
 st.set_page_config(page_title="Battle Dashboard", layout="wide")
 
 # つくりたい2つのタブを定義
-tab_select,tab_battle  = st.tabs(["選出ポケモン分析","対戦成績"])
+tab_battle, tab_select = st.tabs(["対戦成績", "選出ポケモン分析"])
 
 # ================================================================
 # ① 対戦成績タブ
